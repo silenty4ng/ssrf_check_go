@@ -46,6 +46,8 @@ ssrfcheck -mode whitelist -allow-hosts .example.com -allow-ports 80,443 http://a
 
 # 从标准输入读取，一行一个地址
 echo "http://2130706433/" | ssrfcheck
+# 没给地址时也会读标准输入；若 stdin 就是交互式终端（没管道也没重定向），
+# 直接打印用法并退出码 2，而不是静静地等你输入
 
 # 生成配置模板并落盘
 ssrfcheck -dump-config yaml -o ssrf.yaml

@@ -135,6 +135,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	inputs := fs.Args()
 	if len(inputs) == 0 {
+		// 交互式终端上 stdin 不会自己 EOF，scanner 会一直等下去，看起来像卡死。
+		// 这种「人在终端里跑、又没给地址」的情况直接给用法，别让用户对着光标发呆。
+		if stdinIsTerminal(stdin) {
+			fmt.Fprintln(stderr, "请通过参数或标准输入提供待校验地址")
+			fs.Usage()
+			return 2
+		}
 		inputs = readLines(stdin)
 	}
 	if len(inputs) == 0 {
@@ -237,6 +244,27 @@ func readLines(r io.Reader) []string {
 		out = append(out, sc.Text())
 	}
 	return out
+}
+
+// stdinIsTerminal 是 isTerminal 的间接层，只为了在测试里模拟「stdin 接在终端上」：
+// 真要造一个「像终端、但读一下就 EOF」的字符设备是做不到的，而 /dev/null 会立刻 EOF，
+// 反而让「有没有走终端分支」这件事失去区分度。
+var stdinIsTerminal = isTerminal
+
+// isTerminal 判断 r 是不是交互式终端（字符设备）。
+//
+// 管道、重定向的文件、bytes.Buffer 都不是字符设备，所以 `echo url | ssrfcheck`
+// 和 `ssrfcheck < urls.txt` 照常按行读取，只有「真的接在终端上」才会被判为 true。
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func splitList(s string) []string {

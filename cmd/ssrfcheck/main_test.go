@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -168,6 +169,61 @@ func TestRunWithoutInput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(nil, strings.NewReader(""), &out, &errOut); code != 2 {
 		t.Fatalf("run() = %d, want 2", code)
+	}
+	if !strings.Contains(errOut.String(), "标准输入") {
+		t.Errorf("stderr = %q, want 用法提示", errOut.String())
+	}
+}
+
+func TestIsTerminal(t *testing.T) {
+	if isTerminal(strings.NewReader("http://a.example.com/")) {
+		t.Error("strings.Reader 不该被判定为终端")
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+	if isTerminal(r) {
+		t.Error("管道不该被判定为终端（`echo url | ssrfcheck` 依赖这一点）")
+	}
+
+	// os.DevNull 在 Windows 是 NUL、在类 Unix 是 /dev/null，两边都是字符设备
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("打开 %s 失败: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+	if !isTerminal(devNull) {
+		t.Errorf("%s 是字符设备，应被判定为终端", os.DevNull)
+	}
+}
+
+// probeReader 记录自己有没有被读过。它读起来立刻就 EOF，所以一旦 run 去读了它，
+// 就没有任何东西能证明「没有卡住」——必须靠 stdinIsTerminal 的判定把它们区分开。
+type probeReader struct{ read bool }
+
+func (r *probeReader) Read([]byte) (int, error) {
+	r.read = true
+	return 0, io.EOF
+}
+
+// 交互式终端上不给地址时，必须立刻给出用法提示：不能去读 stdin，
+// 否则 bufio.Scanner 会一直等 EOF，用户在终端里看到的就是「卡住」。
+func TestRunOnTerminalWithoutArgsDoesNotReadStdin(t *testing.T) {
+	old := stdinIsTerminal
+	stdinIsTerminal = func(io.Reader) bool { return true }
+	defer func() { stdinIsTerminal = old }()
+
+	stdin := &probeReader{}
+	var out, errOut bytes.Buffer
+	if code := run(nil, stdin, &out, &errOut); code != 2 {
+		t.Fatalf("run() = %d, want 2", code)
+	}
+	if stdin.read {
+		t.Error("在终端上没给地址时不应该去读标准输入（那样会等到 EOF，看起来像卡死）")
 	}
 	if !strings.Contains(errOut.String(), "标准输入") {
 		t.Errorf("stderr = %q, want 用法提示", errOut.String())
