@@ -1,0 +1,58 @@
+# ssrf 过滤器配置文件
+# JSON 版本可用 ssrf.ExampleConfig(ssrf.FormatJSON) 或 ssrfcheck -dump-config json 生成。
+#
+# mode:
+#   blacklist  只拒绝命中的目标（内建保留地址段 + denied_* 列表）
+#   whitelist  只放行显式允许的目标，其余一律拒绝（推荐）
+mode: whitelist
+
+# 允许的 URL scheme，默认 [http, https]
+allowed_schemes:
+  - http
+  - https
+
+# 输入不带 scheme 时补全的 scheme，默认 http
+default_scheme: http
+
+# ---------------- 白名单 ----------------
+# 主机白名单，支持三种写法：
+#   api.github.com   精确匹配
+#   .example.com     匹配 example.com 及其所有子域
+#   *.example.com    只匹配子域
+allowed_hosts:
+  - .example.com
+  - api.github.com
+
+# 地址段白名单，可省略掩码（按 /32 或 /128 处理）。
+# 它同时是「信任标记」：只有写在这里的网段才会跳过内建保留地址段检查，
+# 所以需要访问内网服务时必须在此显式放行，而不是靠域名白名单漂白。
+allowed_cidrs:
+  - 10.0.0.0/8
+
+# 端口白名单，留空表示不限制；仅 whitelist 模式生效
+allowed_ports:
+  - 80
+  - 443
+
+# ---------------- 黑名单 ----------------
+# 主机黑名单（写法同 allowed_hosts）。内建 metadata 主机名始终生效，无法关闭。
+denied_hosts:
+  - metadata.google.internal
+
+# 追加拒绝的地址段，叠加在内建保留地址段之上
+denied_cidrs:
+  - 192.0.2.0/24
+
+# 追加拒绝的端口，叠加在内建高危端口（22/6379/9200/11211 ...）之上
+denied_ports:
+  - 8888
+
+# ---------------- 其他 ----------------
+# 允许非 ASCII 主机名（IDN），默认 false，避免同形异义绕过
+allow_non_ascii_host: false
+# 允许 URL 中出现 user:pass@，默认 false
+allow_user_info: false
+# 关闭 DNS 解析，默认 false；关闭后黑名单模式的 IP 层防护会失效，请谨慎使用
+disable_resolve: false
+# 建连超时，默认 10s
+dial_timeout: 10s

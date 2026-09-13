@@ -1,0 +1,32 @@
+{
+  "mode": "whitelist",
+  "allowed_schemes": [
+    "http",
+    "https"
+  ],
+  "default_scheme": "http",
+  "allowed_hosts": [
+    ".example.com",
+    "api.github.com"
+  ],
+  "allowed_cidrs": [
+    "10.0.0.0/8"
+  ],
+  "allowed_ports": [
+    80,
+    443
+  ],
+  "denied_hosts": [
+    "metadata.google.internal"
+  ],
+  "denied_cidrs": [
+    "192.0.2.0/24"
+  ],
+  "denied_ports": [
+    8888
+  ],
+  "allow_non_ascii_host": false,
+  "allow_user_info": false,
+  "disable_resolve": false,
+  "dial_timeout": "10s"
+}
