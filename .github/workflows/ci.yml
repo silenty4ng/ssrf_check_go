@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./... -count=1
+
+      # 竞态检测单独跑：Filter 是构造后只读、可并发使用的，这条不能省
+      - name: test -race
+        run: go test -race ./... -count=1
+
+      # 解析器与配置解析是绕过入口，留一点 fuzz 时间兜底
+      - name: fuzz
+        run: |
+          go test ./ssrf -run XXX -fuzz=FuzzCheck -fuzztime=30s
+          go test ./ssrf -run XXX -fuzz=FuzzParseConfig -fuzztime=30s

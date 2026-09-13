@@ -15,10 +15,14 @@
 //	if err != nil {
 //		log.Fatal(err)
 //	}
+//	// 推荐：NewClient 已经把「请求级校验 + IP 固定建连 + 逐跳重定向校验」都接好，
+//	// 域名白名单在建连路径上也会生效。
+//	client := f.NewClient()
+//
+//	// 需要自己控制请求时，也可以单独用：
 //	if _, err := f.Check(ctx, userInput); err != nil {
 //		// 拒绝请求
 //	}
-//	client := &http.Client{Transport: f.NewTransport()}
 package ssrf
 
 import (
@@ -103,19 +107,25 @@ type Config struct {
 	//   ".example.com"  匹配 example.com 及其所有子域
 	//   "*.example.com" 只匹配子域
 	//
-	// 名单在 New 时被预编译成索引，单次匹配只与域名的标签数有关，与名单规模无关，
-	// 因此可以放心配置上万条。
+	// 名单在 New 时被规范化（小写、折叠全角、剥离末尾点号，与输入侧规则一致）并预编译成
+	// 索引，单次匹配只与域名的标签数有关，与名单规模无关，因此可以放心配置上万条。
+	// 无法匹配的写法（如 "**.example.com"、空串、CIDR、与 IP 混用的通配）会让 New 报错，
+	// 而不是留到运行时静默失效。
 	AllowedHosts []string
 	// AllowedCIDRs 允许访问的地址段。它同时也是"信任标记"：只有落在白名单地址段内的
 	// IP 才允许跳过内建保留地址段（回环/私网/链路本地等）检查。
 	// 即：想访问内网服务，必须在这里显式放行对应网段，而不是靠域名白名单漂白。
+	//
+	// 注意：黑名单模式下没有「必须命中白名单」这道闸门，这里的每个网段都只起
+	// 「豁免内建保留地址段」的作用。也就是说在 ModeBlacklist 下写入 127.0.0.1/32，
+	// 效果是放行回环地址，而不是「多允许一点」。配置评审时请特别留意这一点。
 	AllowedCIDRs []netip.Prefix
 	// AllowedPorts 允许的端口，为空表示不限制（仅白名单模式生效）。
 	AllowedPorts []int
 
 	// ---- 黑名单 ----
 
-	// DeniedHosts 拒绝的主机名，写法同 AllowedHosts（同样会预编译成索引）。
+	// DeniedHosts 拒绝的主机名，写法同 AllowedHosts（同样会先规范化、校验，再预编译成索引）。
 	// 同一主机名被多条规则覆盖时（如同时配了 ".example.com" 与 ".a.example.com"），
 	// 拦截信息里回显的是离 TLD 最近、覆盖范围最大的那条（这里是 ".example.com"）；
 	// 拒绝与否的判定不受遍历顺序影响。
@@ -133,6 +143,9 @@ type Config struct {
 
 	// DisableResolve 关闭 DNS 解析（默认 false，即开启）。
 	// 关闭后黑名单模式将失去 IP 层防护，仅建议在纯域名白名单场景下使用。
+	//
+	// 注意：它只作用于 Check 的校验路径。DialContext / NewTransport 为了建连仍会解析域名，
+	// 那条路径上的 IP 校验（Control / checkDialIP）照常执行。
 	DisableResolve bool
 	// LookupIP 自定义解析函数，便于测试或接入内部 DNS，默认 net.DefaultResolver。
 	LookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
@@ -173,6 +186,20 @@ func New(cfg Config) (*Filter, error) {
 	}
 	cfg.DefaultScheme = strings.ToLower(cfg.DefaultScheme)
 
+	// 名单条目必须先规范化再进索引：输入侧的 host 会被折叠全角、剥掉末尾点号，
+	// 名单若不做同样处理就会「配置写了却不生效」，而且不会有任何报错。
+	allowedHosts, err := normalizeHostPatterns(cfg.AllowedHosts, cfg.AllowNonASCIIHost)
+	if err != nil {
+		return nil, fmt.Errorf("ssrf: invalid AllowedHosts: %w", err)
+	}
+	cfg.AllowedHosts = allowedHosts
+
+	deniedHosts, err := normalizeHostPatterns(cfg.DeniedHosts, cfg.AllowNonASCIIHost)
+	if err != nil {
+		return nil, fmt.Errorf("ssrf: invalid DeniedHosts: %w", err)
+	}
+	cfg.DeniedHosts = deniedHosts
+
 	allowedCIDRs, err := normalizePrefixes(cfg.AllowedCIDRs)
 	if err != nil {
 		return nil, fmt.Errorf("ssrf: invalid AllowedCIDRs: %w", err)
@@ -189,6 +216,11 @@ func New(cfg Config) (*Filter, error) {
 		if p < 1 || p > 65535 {
 			return nil, fmt.Errorf("ssrf: invalid port %d", p)
 		}
+	}
+
+	// 负超时会被 NewDialer 静默替换成默认值，配置错误应当当场暴露（0 表示用默认值）。
+	if cfg.DialTimeout < 0 {
+		return nil, fmt.Errorf("ssrf: invalid DialTimeout %v: must not be negative", cfg.DialTimeout)
 	}
 
 	// 内建规则始终叠加，无法被关闭（如需放行请使用 AllowedCIDRs 显式信任）

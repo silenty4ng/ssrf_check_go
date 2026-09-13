@@ -1,6 +1,80 @@
 package ssrf
 
-import "strings"
+import (
+	"fmt"
+	"net/netip"
+	"strings"
+)
+
+// normalizeHostPatterns 规范化并校验主机名名单条目，返回可交给 newHostMatcher 的形式。
+//
+// 为什么必须做：匹配用的 host 已经过 normalizeHost 处理（小写、折叠全角、剥离末尾点号），
+// 如果名单条目不做同样的处理，两者就永远对不上，而且是**静默**对不上：
+// 黑名单里写 "evil.internal." 会变成一条永不命中的规则，防护无声失效；
+// 白名单里写 ".example.com." 同样永不命中，请求被无声拒绝。
+// 因此这里用与 normalizeHost 完全相同的规则处理名单，并让无法匹配的写法直接报错，
+// 而不是留到运行时才发现「配置明明写了却不生效」。
+func normalizeHostPatterns(patterns []string, allowNonASCII bool) ([]string, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(patterns))
+	for i, raw := range patterns {
+		p, err := normalizeHostPattern(raw, allowNonASCII)
+		if err != nil {
+			return nil, fmt.Errorf("[%d] %w", i, err)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// normalizeHostPattern 规范化单条名单写法，保留 ".example.com" / "*.example.com" 前缀。
+func normalizeHostPattern(raw string, allowNonASCII bool) (string, error) {
+	p := foldConfusables(strings.ToLower(strings.TrimSpace(raw)))
+
+	prefix := ""
+	switch {
+	case strings.HasPrefix(p, "*."):
+		prefix, p = "*.", p[2:]
+	case strings.HasPrefix(p, "."):
+		prefix, p = ".", p[1:]
+	}
+	for strings.HasSuffix(p, ".") {
+		p = p[:len(p)-1]
+	}
+	if p == "" {
+		return "", fmt.Errorf("%w: empty pattern %q", ErrInvalidHost, raw)
+	}
+	if strings.Contains(p, "/") {
+		return "", fmt.Errorf("%w: %q looks like a CIDR, use AllowedCIDRs/DeniedCIDRs instead", ErrInvalidHost, raw)
+	}
+
+	// 与输入侧保持一致：IP 字面量（含十进制 / 八进制 / 十六进制等宽松写法）统一成规范形式，
+	// 否则 "0177.0.0.1" 这种写法在名单里永远匹配不到已归一为 127.0.0.1 的 host。
+	if addr, err := netip.ParseAddr(p); err == nil {
+		if prefix != "" {
+			return "", fmt.Errorf("%w: %q cannot combine a wildcard prefix with an IP literal", ErrInvalidHost, raw)
+		}
+		return normalizeAddr(addr).String(), nil
+	}
+	if addr, ok := parseLooseIPv4(p); ok {
+		if prefix != "" {
+			return "", fmt.Errorf("%w: %q cannot combine a wildcard prefix with an IP literal", ErrInvalidHost, raw)
+		}
+		return addr.String(), nil
+	}
+
+	if !isASCII(p) && !allowNonASCII {
+		// 输入侧的这类主机名同样会被拒（AllowNonASCIIHost 默认关闭），
+		// 留在名单里是一条永不命中的规则，不如直接报错。
+		return "", fmt.Errorf("%w: %q (set allow_non_ascii_host to enable IDN hosts)", ErrNonASCIIHost, raw)
+	}
+	if err := validateDomain(p, isASCII(p)); err != nil {
+		return "", err
+	}
+	return prefix + p, nil
+}
 
 // hostPatternKind 是主机名名单里一条写法支持的形式。
 type hostPatternKind uint8
@@ -35,6 +109,9 @@ type hostMatcher struct {
 
 // newHostMatcher 预编译名单：一次性完成去空白、小写化和前缀解析，
 // 使每个请求的匹配路径上不再有 ToLower / TrimSpace / 字符串拼接。
+//
+// 调用方应先经 normalizeHostPatterns 规范化：这里只做小写化，
+// 不会折叠全角或剥离末尾点号（那些属于「配置校验」的职责，见 normalizeHostPatterns）。
 func newHostMatcher(patterns []string) hostMatcher {
 	m := hostMatcher{}
 	if len(patterns) == 0 {

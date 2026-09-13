@@ -12,6 +12,7 @@ GO        ?= go
 ARGS      ?=
 BENCHTIME ?= 100ms
 TIMEOUT   ?= 60s
+FUZZTIME  ?= 30s
 
 ifeq ($(OS),Windows_NT)
 BIN_DIR ?= bin
@@ -28,7 +29,7 @@ RM_COV  ?= rm -f coverage.out coverage.html
 RM_DIR  ?= rmdir $(BIN_DIR) 2>/dev/null || true
 endif
 
-.PHONY: all help build install run demo test race cover bench vet fmt tidy clean
+.PHONY: all help build install run demo test race cover bench fuzz vet fmt tidy clean
 
 # all 故意不带 -race：提交前想跑得快点，需要竞态检测时走 make race
 all: fmt vet test
@@ -43,6 +44,7 @@ help:
 	@echo   race     go test -race ./...
 	@echo   cover    coverage profile + coverage.html
 	@echo   bench    run all benchmarks in ./ssrf (BENCHTIME=100ms)
+	@echo   fuzz     run parser/config fuzz targets for FUZZTIME=30s each
 	@echo   vet      go vet ./...
 	@echo   fmt      go fmt ./...
 	@echo   tidy     go mod tidy
@@ -79,6 +81,11 @@ cover:
 # -run XXX 让基准之外什么都不跑，避免把测试的执行时间算进基准结果
 bench:
 	$(GO) test ./ssrf -run XXX -bench . -benchmem -benchtime $(BENCHTIME) -count=1
+
+# 解析器与配置解析是绕过入口，随机输入只允许「拒绝」不允许「panic / 不幂等」
+fuzz:
+	$(GO) test ./ssrf -run XXX -fuzz=FuzzCheck -fuzztime $(FUZZTIME)
+	$(GO) test ./ssrf -run XXX -fuzz=FuzzParseConfig -fuzztime $(FUZZTIME)
 
 vet:
 	$(GO) vet ./...

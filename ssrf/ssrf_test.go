@@ -414,9 +414,19 @@ func TestCheckRedirect(t *testing.T) {
 		t.Errorf("CheckRedirect(example.com) = %v, want nil", err)
 	}
 
-	loop := make([]*http.Request, 0, 4)
-	for i := 0; i < 4; i++ {
-		loop = append(loop, safe)
+	// via 是「已经发出过的请求」，因此边界在 len(via) == maxRedirects：
+	// 此时还能再跟一跳（共 3 个请求），再多就拦下。
+	atLimit := make([]*http.Request, maxRedirects)
+	for i := range atLimit {
+		atLimit[i] = safe
+	}
+	if err := f.CheckRedirect(safe, atLimit); err != nil {
+		t.Errorf("CheckRedirect(via=%d) = %v, want nil（还能再跟随一跳）", maxRedirects, err)
+	}
+
+	loop := make([]*http.Request, maxRedirects+1)
+	for i := range loop {
+		loop[i] = safe
 	}
 	err = f.CheckRedirect(safe, loop)
 	if !errors.Is(err, ErrBlocked) {

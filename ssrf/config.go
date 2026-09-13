@@ -332,6 +332,8 @@ allowed_hosts:
 # 地址段白名单，可省略掩码（按 /32 或 /128 处理）。
 # 它同时是「信任标记」：只有写在这里的网段才会跳过内建保留地址段检查，
 # 所以需要访问内网服务时必须在此显式放行，而不是靠域名白名单漂白。
+# 注意：blacklist 模式下没有「必须命中白名单」这道闸门，这里的每个网段都只起
+# 「豁免内建保留地址段」的作用——写 127.0.0.1/32 的效果是放行回环地址。
 allowed_cidrs:
   - 10.0.0.0/8
 
@@ -341,11 +343,15 @@ allowed_ports:
   - 443
 
 # ---------------- 黑名单 ----------------
-# 主机黑名单（写法同 allowed_hosts）。内建 metadata 主机名始终生效，无法关闭。
+# 主机黑名单。写法同 allowed_hosts：条目会先做同样的规范化（小写、折叠全角、
+# 剥掉末尾点号），写错的写法（如 "**.example.com"）会让程序在启动时报错，
+# 而不是留到运行时静默失效。
+# 内建 metadata 主机名始终生效，无法关闭；下面这条只是示例。
 denied_hosts:
   - metadata.google.internal
 
-# 追加拒绝的地址段，叠加在内建保留地址段之上
+# 追加拒绝的地址段，叠加在内建保留地址段之上。
+# 下面这条只是示例：TEST-NET 网段内建已经默认拒绝，这里写出来只为演示写法。
 denied_cidrs:
   - 192.0.2.0/24
 
@@ -358,7 +364,8 @@ denied_ports:
 allow_non_ascii_host: false
 # 允许 URL 中出现 user:pass@，默认 false
 allow_user_info: false
-# 关闭 DNS 解析，默认 false；关闭后黑名单模式的 IP 层防护会失效，请谨慎使用
+# 关闭 DNS 解析，默认 false；关闭后黑名单模式的 IP 层防护会失效，请谨慎使用。
+# 它只影响 Check 的校验路径，DialContext 为了建连仍会解析域名。
 disable_resolve: false
 # 建连超时，默认 10s
 dial_timeout: 10s

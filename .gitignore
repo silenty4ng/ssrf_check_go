@@ -1,9 +1,10 @@
 # 构建产物（Makefile 的 build / install 输出目录）
 /bin/
 
-# 覆盖率报告（Makefile 的 cover 目标）
+# 覆盖率报告（Makefile 的 cover 目标，以及各种工具默认产物名）
 coverage.out
 coverage.html
+/coverage
 
 # 本地临时生成/调试用的配置文件
 /ssrf.yaml
